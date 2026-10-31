@@ -1,0 +1,18 @@
+{
+  "watermark_width_ratio": 0.55,
+  "opacity": 0.8,
+  "horizontal_alignment": "center",
+  "vertical_alignment": "bottom",
+  "offset_x": 10,
+  "offset_y": 12,
+  "output_format": "jpg",
+  "add_text_enabled": true,
+  "text_content": "内部样例",
+  "text_position": "center",
+  "text_size": 32,
+  "text_color": "#FFFFFF",
+  "text_opacity": 0.9,
+  "resume_enabled": true,
+  "template_text": "{filename}_{date}_{index}{extension}",
+  "use_template": true
+}

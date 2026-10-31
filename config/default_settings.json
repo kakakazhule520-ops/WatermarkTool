@@ -1,0 +1,130 @@
+# WatermarkTool
+
+WatermarkTool 是一个用于批量处理图片水印的 Python 桌面应用，目标是：在不依赖原始源码的前提下，尽可能复刻常见图片批量水印工具的功能，并增强兼容性。
+
+## 特性
+
+- 批量扫描源目录中的 JPG/JPEG/PNG/WEBP/BMP/TIFF 图片
+- 支持透明 PNG 水印
+- 支持水印位置、比例、透明度、偏移量配置
+- 支持输出格式 keep/jpg/png/webp
+- 支持断点续传（跳过已存在文件）
+- 支持文本、编号、模板和安全脚本命名规则
+- 支持批量处理日志和停止任务
+- 支持设置保存/恢复
+- 支持最小兼容性设计（不强制依赖 AVX2）
+
+## 运行方式
+
+### 1. 安装依赖
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 2. 启动应用
+
+```bash
+python main.py
+```
+
+## 目录结构
+
+```text
+WatermarkTool/
+├── main.py
+├── requirements.txt
+├── README.md
+├── config/
+│   └── default_settings.json
+├── rules/
+│   ├── example_rules.json
+│   └── example_template.txt
+├── core/
+│   ├── __init__.py
+│   ├── image_processor.py
+│   ├── watermark.py
+│   ├── compression.py
+│   ├── naming.py
+│   ├── rules.py
+│   └── file_manager.py
+├── gui/
+│   ├── __init__.py
+│   ├── main_window.py
+│   ├── workers.py
+│   └── preview_panel.py
+├── tests/
+│   ├── test_image_processing.py
+│   ├── test_naming.py
+│   └── test_file_manager.py
+├── build/
+│   └── build_exe.bat
+└── .gitignore
+```
+
+## 常用功能说明
+
+### 水印位置
+
+- 水平对齐：左 / 中 / 右
+- 垂直对齐：上 / 中 / 下
+- 偏移量单位：像素
+
+### 自定义规则
+
+`rules/example_rules.json` 中提供了一个示例。启用“自定义规则”后，可以加载 JSON 格式规则，规则中的参数会覆盖当前界面参数。
+
+### 模板命名
+
+`rules/example_template.txt` 中提供了模板示例，变量如下：
+
+- `{filename}`：原文件名（不含扩展名）
+- `{index}`：序号
+- `{date}`：当前日期（YYYYMMDD）
+- `{time}`：当前时间（HHMMSS）
+- `{extension}`：文件扩展名（不含点）
+
+### 高级脚本
+
+高级脚本使用受限安全接口，不允许执行任意系统命令或删除文件。脚本中只能访问允许的变量和安全函数，以避免危险操作。
+
+## 打包 EXE
+
+Windows 下执行：
+
+```bat
+build\build_exe.bat
+```
+
+或者手动：
+
+```bash
+pyinstaller --noconsole --onedir --name WatermarkTool main.py
+```
+
+说明：
+
+- 优先使用 `onedir` 稳定版，避免单文件版兼容性问题。
+- 若需要单文件版，需要在目标 Windows 环境中单独测试验证。
+- 由于目标电脑为旧款 x64 机器，建议不要强制依赖 AVX2 相关编译选项。
+
+## 兼容性说明
+
+- 本项目优先使用通用 x86-64 兼容依赖版本。
+- 不强制依赖 AVX2 指令集。
+- PyInstaller 打包时应优先使用通用二进制兼容参数。
+- 在旧款 Intel Core i3-3240 等环境中，需要实际运行验证，而不是只在新机器上测试。
+
+## 运行错误排查
+
+- 如果依赖安装失败，先升级 pip 后重试。
+- 如果 GUI 无法启动，检查是否已安装 PySide6。
+- 如果图片处理报错，查看日志窗口中的具体错误。
+- 如果规则文件格式错误，查看规则加载提示。
+
+## 免责声明
+
+本项目是独立重制项目，不包含原软件源码或反编译产物。界面和参数尽量模拟原工具的典型使用方式，但在未拿到原始实现的前提下，不能声称完全逐字一致。所有配置和行为均采用合理、可配置的实现方式。
