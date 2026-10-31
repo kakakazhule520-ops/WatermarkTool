@@ -7,11 +7,11 @@
   "offset_y": 12,
   "output_format": "jpg",
   "add_text_enabled": true,
-  "text_content": "内部样例",
+  "text_content": "内部示例",
   "text_position": "center",
   "text_size": 32,
   "text_color": "#FFFFFF",
-  "text_opacity": 0.9,
+  "text_opacity": 1.0,
   "resume_enabled": true,
   "template_text": "{filename}_{date}_{index}{extension}",
   "use_template": true
