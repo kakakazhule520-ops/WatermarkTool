@@ -1,58 +1,106 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
-from PIL import Image, ImageOps
+from PIL import Image, UnidentifiedImageError
+
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-def load_watermark(path: str) -> Image.Image:
+def ensure_directory(path: str) -> bool:
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def validate_source_dir(path: str) -> Tuple[bool, str]:
+    if not path:
+        return False, "源目录为空。"
     p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f"水印文件不存在：{path}")
-    with Image.open(p) as img:
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in {"RGBA", "LA", "P"}:
-            img = img.convert("RGBA")
-        return img.copy()
+        return False, f"源目录不存在：{path}"
+    if not p.is_dir():
+        return False, f"不是有效目录：{path}"
+    if not os.access(p, os.R_OK):
+        return False, f"源目录无读取权限：{path}"
+    return True, ""
 
 
-def compute_watermark_size(base_width: int, base_height: int, watermark: Image.Image, ratio: float) -> Tuple[int, int]:
-    ratio = max(0.01, min(1.0, float(ratio)))
-    target_width = max(1, int(base_width * ratio))
-    original_w, original_h = watermark.size
-    if original_w <= 0 or original_h <= 0:
-        return 1, 1
-    scale = target_width / float(original_w)
-    new_w = max(1, int(original_w * scale))
-    new_h = max(1, int(original_h * scale))
-    if new_h > base_height:
-        scale = base_height / float(original_h)
-        new_h = max(1, int(original_h * scale))
-        new_w = max(1, int(original_w * scale))
-    return new_w, new_h
+def check_file_access(path: str) -> Tuple[bool, str]:
+    p = Path(path)
+    if not p.exists():
+        return False, f"文件不存在：{path}"
+    if not p.is_file():
+        return False, f"不是文件：{path}"
+    if not os.access(p, os.R_OK):
+        return False, f"文件无读取权限：{path}"
+    return True, ""
 
 
-def compute_position(base_width: int, base_height: int, watermark_w: int, watermark_h: int,
-                    horizontal_alignment: str, vertical_alignment: str,
-                    offset_x: int, offset_y: int) -> Tuple[int, int]:
-    h = (horizontal_alignment or "right").lower()
-    v = (vertical_alignment or "bottom").lower()
+def scan_image_files(source_dir: str) -> List[str]:
+    p = Path(source_dir)
+    if not p.exists() or not p.is_dir():
+        return []
+    files: List[str] = []
+    for item in sorted(p.iterdir(), key=lambda x: x.name.lower()):
+        if item.is_file() and item.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files.append(str(item))
+    return files
 
-    if h == "left":
-        x = offset_x
-    elif h == "center":
-        x = max(0, (base_width - watermark_w) // 2 + offset_x)
-    else:
-        x = max(0, base_width - watermark_w - offset_x)
 
-    if v == "top":
-        y = offset_y
-    elif v == "center":
-        y = max(0, (base_height - watermark_h) // 2 + offset_y)
-    else:
-        y = max(0, base_height - watermark_h - offset_y)
+def build_output_path(source_file: str, output_dir: str, output_format: str) -> str:
+    src = Path(source_file)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fmt = (output_format or "keep").lower()
+    ext_map = {"keep": src.suffix.lower(), "jpg": ".jpg", "jpeg": ".jpg", "png": ".png", "webp": ".webp"}
+    target_ext = ext_map.get(fmt, src.suffix.lower())
+    stem = src.stem
+    candidate = out_dir / f"{stem}{target_ext}"
+    index = 1
+    while candidate.exists() and str(candidate.resolve()) != str(src.resolve()):
+        candidate = out_dir / f"{stem}_{index}{target_ext}"
+        index += 1
+    return str(candidate)
 
-    x = max(0, min(x, max(0, base_width - watermark_w)))
-    y = max(0, min(y, max(0, base_height - watermark_h)))
-    return x, y
+
+def is_valid_image(path: str) -> bool:
+    try:
+        with Image.open(path) as img:
+            img.verify()
+        return True
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+
+
+def save_json_config(path: str, data: dict) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_json_config(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def atomic_write_image(image: Image.Image, destination: str) -> None:
+    dst = Path(destination)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".tmp")
+    if tmp.exists():
+        tmp.unlink()
+    image.save(tmp)
+    os.replace(tmp, dst)

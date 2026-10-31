@@ -1,87 +1,105 @@
-from __future__ import annotations
-
-import os
+import ast
+from datetime import datetime
 from typing import Any, Dict
 
-from PySide6.QtCore import QObject, Signal, Slot
+_ALLOWED = {
+    "filename": None,
+    "index": None,
+    "date": None,
+    "time": None,
+    "extension": None,
+    "str": str,
+    "int": int,
+    "float": float,
+    "len": len,
+    "lower": str.lower,
+    "upper": str.upper,
+    "replace": str.replace,
+    "startswith": str.startswith,
+    "endswith": str.endswith,
+    "format": format,
+}
 
-from core.file_manager import build_output_path, scan_image_files, validate_source_dir
-from core.image_processor import process_one_image
+
+def render_template(template: str, values: Dict[str, Any]) -> str:
+    result = template
+    for key, value in values.items():
+        result = result.replace(f"{{{key}}}", str(value))
+    return result
 
 
-class ProcessingThread(QObject):
-    log = Signal(str)
-    progress = Signal(int, int, str)
-    finished = Signal(dict)
+def generate_output_name(source_name: str, config: Dict[str, Any], index: int = 1, current_datetime=None) -> str:
+    dt = current_datetime or datetime.now()
+    stem = source_name.rsplit(".", 1)[0] if "." in source_name else source_name
+    ext = source_name.rsplit(".", 1)[1].lower() if "." in source_name else ""
 
-    def __init__(self, settings: Dict[str, Any]):
-        super().__init__()
-        self.settings = settings
-        self.cancel_requested = False
+    if config.get("use_advanced_script"):
+        script = config.get("advanced_script", "filename + '_' + str(index)")
+        return evaluate_safe_script(script, {
+            "filename": stem,
+            "index": index,
+            "date": dt.strftime("%Y%m%d"),
+            "time": dt.strftime("%H%M%S"),
+            "extension": ext,
+            "width": config.get("width", 0),
+            "height": config.get("height", 0),
+        })
 
-    def stop(self):
-        self.cancel_requested = True
+    if config.get("use_template"):
+        template = config.get("template_text", "{filename}_{index}{extension}")
+        values = {
+            "filename": stem,
+            "index": index,
+            "date": dt.strftime("%Y%m%d"),
+            "time": dt.strftime("%H%M%S"),
+            "extension": ext,
+        }
+        result = render_template(template, values)
+        return result if ext else result
 
-    @Slot()
-    def run(self):
-        try:
-            ok, error = validate_source_dir(self.settings.get("source_dir", ""))
-            if not ok:
-                self.finished.emit({"success": 0, "failed": 1, "skipped": 0, "cancelled": False, "error": error})
-                return
+    if config.get("add_number_enabled"):
+        digits = max(1, int(config.get("number_digits", 3)))
+        prefix = config.get("number_prefix", "")
+        suffix = config.get("number_suffix", "")
+        num = str(int(config.get("start_index", 1)) + max(0, index - 1)).zfill(digits)
+        target = f"{stem}{prefix}{num}{suffix}"
+        return f"{target}.{ext}" if ext else target
 
-            files = scan_image_files(self.settings.get("source_dir", ""))
-            total = len(files)
-            self.progress.emit(0, total, "开始扫描源目录")
-            self.log.emit(f"[INFO] 共发现 {total} 张图片。")
+    if config.get("add_text_enabled"):
+        text = config.get("text_content", "")
+        target = f"{stem}_{text}"
+        return f"{target}.{ext}" if ext else target
 
-            success_count = 0
-            skip_count = 0
-            fail_count = 0
+    return source_name
 
-            for index, source_path in enumerate(files, start=1):
-                if self.cancel_requested:
-                    self.log.emit("[WARN] 用户中止处理任务。")
-                    break
 
-                output_path = build_output_path(source_path, self.settings.get("output_dir", ""), self.settings.get("output_format", "keep"))
-                if self.settings.get("resume_enabled", True) and os.path.exists(output_path):
-                    skip_count += 1
-                    self.log.emit(f"[SKIP] {os.path.basename(source_path)}（目标文件已存在）")
-                    self.progress.emit(index, total, f"跳过 {index}/{total}")
-                    continue
+def evaluate_safe_script(script: str, env: Dict[str, Any]) -> str:
+    if not script or not isinstance(script, str):
+        raise ValueError("高级脚本为空或格式错误。")
+    if "__" in script:
+        raise ValueError("脚本包含禁止的双下划线字段。")
+    if any(token in script for token in ["import ", "open(", "os.", "subprocess", "exec(", "eval(", "__import__"]):
+        raise ValueError("高级脚本包含不允许的操作。")
 
-                self.log.emit(f"[RUN] 正在处理：{os.path.basename(source_path)}")
-                result = process_one_image(
-                    source_path,
-                    output_path,
-                    self.settings.get("watermark_path", ""),
-                    self.settings,
-                    index=index,
-                )
+    try:
+        tree = ast.parse(script, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"脚本语法错误：{exc.msg}") from exc
 
-                if result[0]:
-                    success_count += 1
-                    self.log.emit(f"[OK] 处理成功：{os.path.basename(source_path)}")
-                else:
-                    fail_count += 1
-                    self.log.emit(f"[ERROR] 处理失败：{os.path.basename(source_path)}（{result[1]}）")
+    allowed_types = (
+        ast.Expression, ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+        ast.UnaryOp, ast.USub, ast.UAdd, ast.Call, ast.Attribute, ast.Name, ast.Load,
+        ast.Constant, ast.Tuple, ast.List, ast.Dict, ast.Subscript, ast.Compare, ast.Gt,
+        ast.GtE, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.And, ast.Or, ast.BoolOp,
+        ast.IfExp, ast.JoinedStr, ast.FormattedValue, ast.keyword, ast.Str
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed_types):
+            raise ValueError(f"脚本包含不允许的语法节点：{type(node).__name__}")
 
-                self.progress.emit(index, total, f"已处理 {index}/{total}")
-
-            self.finished.emit({
-                "success": success_count,
-                "failed": fail_count,
-                "skipped": skip_count,
-                "cancelled": self.cancel_requested,
-                "error": "",
-            })
-        except Exception as exc:
-            self.finished.emit({
-                "success": 0,
-                "failed": 1,
-                "skipped": 0,
-                "cancelled": False,
-                "error": str(exc),
-            })
-            self.log.emit(f"[ERROR] 批量处理异常：{exc}")
+    safe_env = {**_ALLOWED, **env}
+    try:
+        result = eval(compile(tree, "<safe_script>", "eval"), {"__builtins__": {}}, safe_env)
+        return str(result)
+    except Exception as exc:
+        raise ValueError(f"高级脚本执行失败：{exc}") from exc
