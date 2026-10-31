@@ -1,174 +1,33 @@
-# WatermarkTool
+from pathlib import Path
 
-WatermarkTool 是一个独立重制的 Windows 图片批量水印处理软件，目标是尽可能复刻常见水印批量处理工具的界面与操作逻辑，并同时兼容更广泛的 Windows x64 机器。
+from PIL import Image
 
-免责声明：
+from core.file_manager import build_output_path, scan_image_files, validate_source_dir
 
-- 本项目没有原始源码，也不是对原 EXE 的逆向修改。
-- 本项目按“合理、可配置、真实可用”的方式实现，不能声称与原软件完全一致。
-- 具体参数和行为在没有原始规则的前提下，采用合理默认值与用户可覆盖配置。
 
-## 功能概览
+def test_scan_valid_files(tmp_path):
+    (tmp_path / "a.jpg").write_bytes(b"0")
+    (tmp_path / "b.png").write_bytes(b"0")
+    (tmp_path / "c.txt").write_bytes(b"0")
+    files = scan_image_files(str(tmp_path))
+    assert len(files) == 2
 
-- 批量扫描 JPG/JPEG/PNG/WEBP/BMP/TIFF 图片目录
-- 支持透明 PNG 水印
-- 支持水印位置、尺寸比例、透明度、偏移量
-- 支持输出格式 keep/jpg/png/webp
-- 支持断点续传（跳过已存在文件）
-- 支持选定预览图片和自动预览
-- 支持自定义规则 JSON 文件
-- 支持模板命名和受限高级脚本命名
-- 支持处理日志、保存日志和停止任务
-- 支持配置保存/恢复
 
-## 目录结构
+def test_build_output_path_avoids_source_overwrite(tmp_path):
+    src = tmp_path / "sample.jpg"
+    src.write_bytes(b"0")
+    out = build_output_path(str(src), str(tmp_path), "keep")
+    assert out != str(src)
 
-```text
-WatermarkTool/
-├── main.py
-├── requirements.txt
-├── README.md
-├── config/
-│   └── default_settings.json
-├── rules/
-│   ├── example_rules.json
-│   └── example_template.txt
-├── core/
-│   ├── __init__.py
-│   ├── image_processor.py
-│   ├── watermark.py
-│   ├── compression.py
-│   ├── naming.py
-│   ├── rules.py
-│   └── file_manager.py
-├── gui/
-│   ├── __init__.py
-│   ├── main_window.py
-│   ├── preview_panel.py
-│   └── workers.py
-├── tests/
-│   ├── test_image_processing.py
-│   ├── test_naming.py
-│   └── test_file_manager.py
-├── build/
-│   └── build_exe.bat
-└── .gitignore
-```
 
-## 安装依赖
+def test_validate_source_dir(tmp_path):
+    ok, msg = validate_source_dir(str(tmp_path))
+    assert ok is True
+    assert msg == ""
 
-### 1. 创建虚拟环境
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-### 2. 启动源码
-
-```bash
-python main.py
-```
-
-## 运行方式
-
-1. 选择源目录
-2. 选择输出目录
-3. 选择水印图片
-4. 配置水印位置、比例、透明度和偏移量
-5. 选择输出格式和命名方式
-6. 点击“开始处理”
-
-## 自定义规则
-
-规则文件推荐使用 JSON 格式，例如：
-
-```json
-{
-  "watermark_width_ratio": 0.55,
-  "opacity": 0.8,
-  "horizontal_alignment": "center",
-  "vertical_alignment": "bottom",
-  "offset_x": 10,
-  "offset_y": 12,
-  "output_format": "jpg",
-  "add_text_enabled": true,
-  "text_content": "内部示例",
-  "text_size": 32,
-  "resume_enabled": true
-}
-```
-
-示例文件：`rules/example_rules.json`
-
-## 命名模板
-
-模板支持占位符：
-
-- `{filename}`：原文件名（无扩展名）
-- `{index}`：处理序号
-- `{date}`：日期（YYYYMMDD）
-- `{time}`：时间（HHMMSS）
-- `{extension}`：原扩展名
-
-示例：
-
-```text
-{filename}_{index}_{date}{extension}
-```
-
-示例文件：`rules/example_template.txt`
-
-## 高级脚本
-
-高级脚本使用受限安全接口，不允许执行任意系统命令、删除文件或访问本地文件系统。
-
-示例：
-
-```python
-filename + '_' + str(index)
-```
-
-## 打包 EXE
-
-Windows 下执行：
-
-```bat
-build\build_exe.bat
-```
-
-也可使用：
-
-```bash
-pyinstaller --noconsole --onedir --name WatermarkTool main.py
-```
-
-建议优先使用 `onedir` 方案，稳定性更高。单文件版仅在目标环境中测试后再使用。
-
-## 兼容性说明
-
-- 本项目优先使用通用 x86-64 兼容依赖版本。
-- 不强制依赖 AVX2。
-- 不使用需高版本 CPU 的编译参数。
-- 打包与依赖均尽量保持通用性，适合旧款 Windows x64 机器。
-- 目标环境中必须进行真实测试，如 Intel Core i3-3240 等环境。
-
-## 常见问题排查
-
-- 依赖安装失败：先升级 pip，再执行安装命令。
-- GUI 打不开：确认 PySide6 已正确安装。
-- 水印图片报错：检查 PNG/JPG 等文件是否有效。
-- 规则文件错误：查看日志与弹窗提示。
-- 处理失败：检查源目录、输出目录和磁盘空间。
-
-## 测试
-
-```bash
-python -m pytest tests
-```
-
-## 许可证
-
-本项目按 MIT 许可证开源，适合二次开发与学习。
+def test_image_file_opening(tmp_path):
+    img_path = tmp_path / "tiny.png"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(img_path)
+    assert img_path.exists()
+    assert scan_image_files(str(tmp_path))

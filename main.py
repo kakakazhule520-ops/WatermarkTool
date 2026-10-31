@@ -1,24 +1,20 @@
-from pathlib import Path
+"""Core package export helpers for WatermarkTool."""
 
-from core.file_manager import build_output_path, scan_image_files, validate_source_dir
+from __future__ import annotations
 
-
-def test_scan_valid_files(tmp_path):
-    (tmp_path / "a.jpg").write_bytes(b"0")
-    (tmp_path / "b.png").write_bytes(b"0")
-    (tmp_path / "c.txt").write_bytes(b"0")
-    files = scan_image_files(str(tmp_path))
-    assert len(files) == 2
+__all__ = [
+    "main",
+]
 
 
-def test_build_output_path_avoids_source_overwrite(tmp_path):
-    src = tmp_path / "sample.jpg"
-    src.write_bytes(b"0")
-    out = build_output_path(str(src), str(tmp_path), "keep")
-    assert out != str(src)
+def main() -> None:
+    """Run the GUI application."""
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+    import sys
 
-
-def test_validate_source_dir(tmp_path):
-    ok, msg = validate_source_dir(str(tmp_path))
-    assert ok is True
-    assert msg == ""
+    app = QApplication(sys.argv)
+    app.setApplicationName("WatermarkTool")
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

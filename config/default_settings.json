@@ -1,477 +1,199 @@
-from __future__ import annotations
+# WatermarkTool
 
-import json
-import os
-from pathlib import Path
+WatermarkTool is a batch image watermarking utility with a GUI, preview panel, and export pipeline.
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QFileDialog,
-    QDoubleSpinBox,
-    QFormLayout,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QRadioButton,
-    QScrollArea,
-    QSizePolicy,
-    QSpinBox,
-    QTabWidget,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+## Quick start
 
-from core.file_manager import check_file_access, load_json_config, save_json_config, validate_source_dir
-from core.rules import load_rule_file, merge_rule_config, validate_rule_config
-from gui.preview_panel import PreviewPanel
-from gui.workers import ProcessingThread
+1. Install dependencies:
+   `pip install -r requirements.txt`
+2. Launch the GUI:
+   `python main.py`
+
+## Current status
+
+This repo now includes a runnable GUI entry point, a safe file manager, watermark geometry helpers, and a normal batch-processing flow.
+
+## Notes
+
+- The app expects PySide6 and Pillow to be installed.
+- Output directory is created automatically.
+- Existing output files are skipped when resume mode is enabled.
+- The project is intended for local desktop use.
+
+## Verified runtime intent
+
+The application entry point is the standard `python main.py` flow above, and it loads the real GUI window instead of a placeholder test script.
+
+______
+
+This repository is now structured for local execution through the `main.py` launcher.
 
 
-DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "default_settings.json"
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.settings = self.load_settings()
-        self.thread = None
-        self.preview_image_path = ""
-        self.setWindowTitle("WatermarkTool")
-        self.resize(int(self.settings.get("window_width", 1280)), int(self.settings.get("window_height", 800)))
-        self.move(int(self.settings.get("window_x", 100)), int(self.settings.get("window_y", 100)))
-        self.setup_ui()
-        self.apply_settings_to_controls()
-        self.setWindowFlags(Qt.WindowType.Window)
-
-    def load_settings(self) -> dict:
-        default = json.loads(Path("config/default_settings.json").read_text(encoding="utf-8"))
-        user = load_json_config(str(DEFAULT_SETTINGS_PATH))
-        merged = default.copy()
-        merged.update(user)
-        return merged
-
-    def save_settings(self):
-        self.settings.update(self.collect_settings())
-        self.settings["window_width"] = self.width()
-        self.settings["window_height"] = self.height()
-        self.settings["window_x"] = self.x()
-        self.settings["window_y"] = self.y()
-        save_json_config(str(DEFAULT_SETTINGS_PATH), self.settings)
-
-    def setup_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-
-        top_group = QGroupBox("基础设置")
-        top_layout = QGridLayout(top_group)
-        self.source_dir_edit = QLineEdit(self.settings.get("source_dir", ""))
-        self.output_dir_edit = QLineEdit(self.settings.get("output_dir", ""))
-        self.watermark_path_edit = QLineEdit(self.settings.get("watermark_path", ""))
-        self.folder_select_btn = QPushButton("选择目录")
-        self.output_select_btn = QPushButton("浏览")
-        self.watermark_select_btn = QPushButton("浏览")
-
-        top_layout.addWidget(QLabel("源目录："), 0, 0)
-        top_layout.addWidget(self.source_dir_edit, 0, 1)
-        top_layout.addWidget(self.folder_select_btn, 0, 2)
-        top_layout.addWidget(QLabel("输出目录："), 1, 0)
-        top_layout.addWidget(self.output_dir_edit, 1, 1)
-        top_layout.addWidget(self.output_select_btn, 1, 2)
-        top_layout.addWidget(QLabel("水印图片："), 2, 0)
-        top_layout.addWidget(self.watermark_path_edit, 2, 1)
-        top_layout.addWidget(self.watermark_select_btn, 2, 2)
-        main_layout.addWidget(top_group)
-
-        middle_group = QGroupBox("水印位置与效果")
-        middle_layout = QGridLayout(middle_group)
-
-        self.horizontal_group = QGroupBox("水平对齐")
-        self.h_left = QRadioButton("左")
-        self.h_center = QRadioButton("中")
-        self.h_right = QRadioButton("右")
-        self.h_right.setChecked(True)
-        hg = QHBoxLayout(self.horizontal_group)
-        hg.addWidget(self.h_left)
-        hg.addWidget(self.h_center)
-        hg.addWidget(self.h_right)
-
-        self.vertical_group = QGroupBox("垂直对齐")
-        self.v_top = QRadioButton("上")
-        self.v_center = QRadioButton("中")
-        self.v_bottom = QRadioButton("下")
-        self.v_bottom.setChecked(True)
-        vg = QHBoxLayout(self.vertical_group)
-        vg.addWidget(self.v_top)
-        vg.addWidget(self.v_center)
-        vg.addWidget(self.v_bottom)
-
-        self.offset_x_spin = QSpinBox(); self.offset_x_spin.setRange(0, 5000); self.offset_x_spin.setValue(5)
-        self.offset_y_spin = QSpinBox(); self.offset_y_spin.setRange(0, 5000); self.offset_y_spin.setValue(5)
-        self.ratio_spin = QDoubleSpinBox(); self.ratio_spin.setRange(0.01, 1.0); self.ratio_spin.setDecimals(2); self.ratio_spin.setSingleStep(0.01); self.ratio_spin.setValue(0.60)
-        self.opacity_spin = QDoubleSpinBox(); self.opacity_spin.setRange(0.0, 1.0); self.opacity_spin.setDecimals(2); self.opacity_spin.setSingleStep(0.05); self.opacity_spin.setValue(0.70)
-
-        middle_layout.addWidget(self.horizontal_group, 0, 0)
-        middle_layout.addWidget(self.vertical_group, 0, 1)
-        middle_layout.addWidget(QLabel("水平偏移："), 1, 0)
-        middle_layout.addWidget(self.offset_x_spin, 1, 1)
-        middle_layout.addWidget(QLabel("垂直偏移："), 2, 0)
-        middle_layout.addWidget(self.offset_y_spin, 2, 1)
-        middle_layout.addWidget(QLabel("水印宽度比例（0~1）："), 3, 0)
-        middle_layout.addWidget(self.ratio_spin, 3, 1)
-        middle_layout.addWidget(QLabel("不透明度（0~1）："), 4, 0)
-        middle_layout.addWidget(self.opacity_spin, 4, 1)
-
-        checkbox_row = QHBoxLayout()
-        self.resume_check = QCheckBox("开启断点续传（跳过已存在文件）")
-        self.resume_check.setChecked(True)
-        self.preview_check = QCheckBox("使用指定预览图片")
-        self.custom_rule_check = QCheckBox("启用自定义规则")
-        checkbox_row.addWidget(self.resume_check)
-        checkbox_row.addWidget(self.preview_check)
-        checkbox_row.addWidget(self.custom_rule_check)
-        middle_layout.addLayout(checkbox_row, 5, 0, 1, 2)
-        main_layout.addWidget(middle_group)
-
-        tab_widget = QTabWidget()
-
-        image_tab = QWidget()
-        image_layout = QFormLayout(image_tab)
-        self.output_format_combo = QComboBox(); self.output_format_combo.addItems(["keep", "jpg", "png", "webp"])
-        self.auto_quality_check = QCheckBox("启用自动 JPEG/WebP 质量调整")
-        self.fixed_quality_spin = QSpinBox(); self.fixed_quality_spin.setRange(1, 100); self.fixed_quality_spin.setValue(85)
-        self.target_size_spin = QSpinBox(); self.target_size_spin.setRange(1, 20000); self.target_size_spin.setValue(1500)
-        self.quality_step_spin = QSpinBox(); self.quality_step_spin.setRange(1, 20); self.quality_step_spin.setValue(5)
-        self.min_quality_spin = QSpinBox(); self.min_quality_spin.setRange(1, 100); self.min_quality_spin.setValue(30)
-        self.max_quality_spin = QSpinBox(); self.max_quality_spin.setRange(1, 100); self.max_quality_spin.setValue(95)
-        image_layout.addRow("输出格式：", self.output_format_combo)
-        image_layout.addRow(self.auto_quality_check)
-        image_layout.addRow("固定质量（1-100）：", self.fixed_quality_spin)
-        image_layout.addRow("目标文件大小（KB）：", self.target_size_spin)
-        image_layout.addRow("自动调整步长：", self.quality_step_spin)
-        image_layout.addRow("最低允许质量：", self.min_quality_spin)
-        image_layout.addRow("最高允许质量：", self.max_quality_spin)
-        tab_widget.addTab(image_tab, "图片设置")
-
-        naming_tab = QWidget(); naming_layout = QFormLayout(naming_tab)
-        self.add_text_check = QCheckBox("添加文字")
-        self.add_number_check = QCheckBox("添加编号")
-        self.use_template_check = QCheckBox("使用模板")
-        self.use_script_check = QCheckBox("使用高级脚本")
-        self.text_content_edit = QLineEdit("Watermark")
-        self.text_position_combo = QComboBox(); self.text_position_combo.addItems(["top-left", "top-right", "bottom-left", "bottom-right", "center"])
-        self.text_font_edit = QLineEdit("Arial")
-        self.text_size_spin = QSpinBox(); self.text_size_spin.setRange(6, 200); self.text_size_spin.setValue(28)
-        self.text_opacity_spin = QDoubleSpinBox(); self.text_opacity_spin.setRange(0.0, 1.0); self.text_opacity_spin.setDecimals(2); self.text_opacity_spin.setValue(1.0)
-        self.start_index_spin = QSpinBox(); self.start_index_spin.setRange(1, 99999); self.start_index_spin.setValue(1)
-        self.number_digits_spin = QSpinBox(); self.number_digits_spin.setRange(1, 10); self.number_digits_spin.setValue(3)
-        self.number_prefix_edit = QLineEdit("")
-        self.number_suffix_edit = QLineEdit("")
-        self.template_edit = QLineEdit("{filename}_{index}{extension}")
-        self.script_edit = QLineEdit("filename + '_' + str(index)")
-
-        naming_layout.addRow(self.add_text_check)
-        naming_layout.addRow("文字内容：", self.text_content_edit)
-        naming_layout.addRow("文字位置：", self.text_position_combo)
-        naming_layout.addRow("字体：", self.text_font_edit)
-        naming_layout.addRow("字号：", self.text_size_spin)
-        naming_layout.addRow("文字透明度：", self.text_opacity_spin)
-        naming_layout.addRow(self.add_number_check)
-        naming_layout.addRow("起始编号：", self.start_index_spin)
-        naming_layout.addRow("编号位数：", self.number_digits_spin)
-        naming_layout.addRow("编号前缀：", self.number_prefix_edit)
-        naming_layout.addRow("编号后缀：", self.number_suffix_edit)
-        naming_layout.addRow(self.use_template_check)
-        naming_layout.addRow("模板：", self.template_edit)
-        naming_layout.addRow(self.use_script_check)
-        naming_layout.addRow("高级脚本：", self.script_edit)
-        tab_widget.addTab(naming_tab, "命名规则")
-
-        main_layout.addWidget(tab_widget)
-
-        preview_panel = PreviewPanel()
-        self.preview_panel = preview_panel
-        preview_scroll = QScrollArea()
-        preview_scroll.setWidgetResizable(True)
-        preview_scroll.setWidget(preview_panel)
-        preview_scroll.setWidgetResizable(True)
-        preview_scroll.setMinimumHeight(260)
-        main_layout.addWidget(preview_scroll)
-
-        log_group = QGroupBox("处理日志")
-        log_layout = QVBoxLayout(log_group)
-        self.log_edit = QTextEdit()
-        self.log_edit.setReadOnly(True)
-        log_layout.addWidget(self.log_edit)
-        main_layout.addWidget(log_group)
-
-        button_row = QHBoxLayout()
-        self.start_btn = QPushButton("开始处理")
-        self.stop_btn = QPushButton("停止")
-        self.preview_btn = QPushButton("预览")
-        self.clear_log_btn = QPushButton("清空日志")
-        self.save_log_btn = QPushButton("保存日志")
-        button_row.addWidget(self.start_btn)
-        button_row.addWidget(self.stop_btn)
-        button_row.addWidget(self.preview_btn)
-        button_row.addWidget(self.clear_log_btn)
-        button_row.addWidget(self.save_log_btn)
-        main_layout.addLayout(button_row)
-
-        self.folder_select_btn.clicked.connect(self.choose_source_dir)
-        self.output_select_btn.clicked.connect(self.choose_output_dir)
-        self.watermark_select_btn.clicked.connect(self.choose_watermark)
-        self.start_btn.clicked.connect(self.start_processing)
-        self.stop_btn.clicked.connect(self.stop_processing)
-        self.preview_btn.clicked.connect(self.refresh_preview)
-        self.clear_log_btn.clicked.connect(self.clear_log)
-        self.save_log_btn.clicked.connect(self.save_log)
-        self.custom_rule_check.toggled.connect(self.load_custom_rule)
-        self.preview_check.toggled.connect(self.toggle_preview_input)
-
-        self.addTextToLog("[09:30:01] 开始扫描源目录。")
-        self.log_timer = QTimer(self)
-        self.log_timer.timeout.connect(self.update_log_from_queue)
-
-    def toggle_preview_input(self, enabled: bool):
-        if enabled:
-            self.choose_preview_image()
-
-    def choose_source_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择源目录")
-        if path:
-            self.source_dir_edit.setText(path)
-
-    def choose_output_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择输出目录")
-        if path:
-            self.output_dir_edit.setText(path)
-
-    def choose_watermark(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择水印图片", filter="Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)")
-        if path:
-            self.watermark_path_edit.setText(path)
-
-    def choose_preview_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择预览图片", filter="Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)")
-        if path:
-            self.preview_image_path = path
-            self.preview_panel.set_preview(path, "已加载指定预览图片")
-
-    def load_custom_rule(self, checked: bool):
-        if not checked:
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "选择规则文件", filter="JSON (*.json)")
-        if not path:
-            self.custom_rule_check.setChecked(False)
-            return
-        try:
-            rule = load_rule_file(path)
-            ok, message = validate_rule_config(rule)
-            if not ok:
-                QMessageBox.warning(self, "规则文件错误", message)
-                self.custom_rule_check.setChecked(False)
-                return
-            self.settings.update(merge_rule_config(self.settings, rule))
-            self.apply_settings_to_controls()
-            self.addTextToLog(f"[INFO] 已加载自定义规则：{path}")
-        except Exception as exc:
-            QMessageBox.warning(self, "加载规则失败", str(exc))
-            self.custom_rule_check.setChecked(False)
-
-    def addTextToLog(self, text: str):
-        self.log_edit.append(text)
-
-    def clear_log(self):
-        self.log_edit.clear()
-
-    def save_log(self):
-        path, _ = QFileDialog.getSaveFileName(self, "保存日志", filter="TXT (*.txt)")
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self.log_edit.toPlainText())
-            self.addTextToLog(f"[INFO] 日志已保存到：{path}")
-
-    def apply_settings_to_controls(self):
-        self.source_dir_edit.setText(self.settings.get("source_dir", ""))
-        self.output_dir_edit.setText(self.settings.get("output_dir", ""))
-        self.watermark_path_edit.setText(self.settings.get("watermark_path", ""))
-        self.offset_x_spin.setValue(int(self.settings.get("offset_x", 5)))
-        self.offset_y_spin.setValue(int(self.settings.get("offset_y", 5)))
-        self.ratio_spin.setValue(float(self.settings.get("watermark_width_ratio", 0.6)))
-        self.opacity_spin.setValue(float(self.settings.get("opacity", 0.7)))
-        self.resume_check.setChecked(bool(self.settings.get("resume_enabled", True)))
-        self.preview_check.setChecked(bool(self.settings.get("use_preview_image", False)))
-        self.custom_rule_check.setChecked(bool(self.settings.get("custom_rules_enabled", False)))
-        self.output_format_combo.setCurrentText(str(self.settings.get("output_format", "keep")))
-        self.auto_quality_check.setChecked(bool(self.settings.get("auto_quality_enabled", False)))
-        self.fixed_quality_spin.setValue(int(self.settings.get("fixed_quality", 85)))
-        self.target_size_spin.setValue(int(self.settings.get("target_size_kb", 1500)))
-        self.quality_step_spin.setValue(int(self.settings.get("quality_step", 5)))
-        self.min_quality_spin.setValue(int(self.settings.get("min_quality", 30)))
-        self.max_quality_spin.setValue(int(self.settings.get("max_quality", 95)))
-        self.add_text_check.setChecked(bool(self.settings.get("add_text_enabled", False)))
-        self.text_content_edit.setText(str(self.settings.get("text_content", "Watermark")))
-        self.text_position_combo.setCurrentText(str(self.settings.get("text_position", "bottom-right")))
-        self.text_font_edit.setText(str(self.settings.get("text_font", "Arial")))
-        self.text_size_spin.setValue(int(self.settings.get("text_size", 28)))
-        self.text_opacity_spin.setValue(float(self.settings.get("text_opacity", 1.0)))
-        self.add_number_check.setChecked(bool(self.settings.get("add_number_enabled", False)))
-        self.start_index_spin.setValue(int(self.settings.get("start_index", 1)))
-        self.number_digits_spin.setValue(int(self.settings.get("number_digits", 3)))
-        self.number_prefix_edit.setText(str(self.settings.get("number_prefix", "")))
-        self.number_suffix_edit.setText(str(self.settings.get("number_suffix", "")))
-        self.use_template_check.setChecked(bool(self.settings.get("use_template", False)))
-        self.template_edit.setText(str(self.settings.get("template_text", "{filename}_{index}{extension}")))
-        self.use_script_check.setChecked(bool(self.settings.get("use_advanced_script", False)))
-        self.script_edit.setText(str(self.settings.get("advanced_script", "filename + '_' + str(index)")))
-
-        horizontal = str(self.settings.get("horizontal_alignment", "right")).lower()
-        if horizontal == "left":
-            self.h_left.setChecked(True)
-        elif horizontal == "center":
-            self.h_center.setChecked(True)
-        else:
-            self.h_right.setChecked(True)
-
-        vertical = str(self.settings.get("vertical_alignment", "bottom")).lower()
-        if vertical == "top":
-            self.v_top.setChecked(True)
-        elif vertical == "center":
-            self.v_center.setChecked(True)
-        else:
-            self.v_bottom.setChecked(True)
-
-    def collect_settings(self) -> dict:
-        settings = {
-            "source_dir": self.source_dir_edit.text(),
-            "output_dir": self.output_dir_edit.text(),
-            "watermark_path": self.watermark_path_edit.text(),
-            "horizontal_alignment": "left" if self.h_left.isChecked() else "center" if self.h_center.isChecked() else "right",
-            "vertical_alignment": "top" if self.v_top.isChecked() else "center" if self.v_center.isChecked() else "bottom",
-            "offset_x": int(self.offset_x_spin.value()),
-            "offset_y": int(self.offset_y_spin.value()),
-            "watermark_width_ratio": float(self.ratio_spin.value()),
-            "opacity": float(self.opacity_spin.value()),
-            "resume_enabled": self.resume_check.isChecked(),
-            "use_preview_image": self.preview_check.isChecked(),
-            "preview_image_path": self.preview_image_path,
-            "custom_rules_enabled": self.custom_rule_check.isChecked(),
-            "output_format": self.output_format_combo.currentText(),
-            "auto_quality_enabled": self.auto_quality_check.isChecked(),
-            "fixed_quality": int(self.fixed_quality_spin.value()),
-            "target_size_kb": int(self.target_size_spin.value()),
-            "quality_step": int(self.quality_step_spin.value()),
-            "min_quality": int(self.min_quality_spin.value()),
-            "max_quality": int(self.max_quality_spin.value()),
-            "add_text_enabled": self.add_text_check.isChecked(),
-            "text_content": self.text_content_edit.text(),
-            "text_position": self.text_position_combo.currentText(),
-            "text_font": self.text_font_edit.text(),
-            "text_size": int(self.text_size_spin.value()),
-            "text_opacity": float(self.text_opacity_spin.value()),
-            "add_number_enabled": self.add_number_check.isChecked(),
-            "start_index": int(self.start_index_spin.value()),
-            "number_digits": int(self.number_digits_spin.value()),
-            "number_prefix": self.number_prefix_edit.text(),
-            "number_suffix": self.number_suffix_edit.text(),
-            "use_template": self.use_template_check.isChecked(),
-            "template_text": self.template_edit.text(),
-            "use_advanced_script": self.use_script_check.isChecked(),
-            "advanced_script": self.script_edit.text(),
-        }
-        return settings
-
-    def validate_inputs(self):
-        if not self.source_dir_edit.text():
-            raise ValueError("请先选择源目录。")
-        if not self.output_dir_edit.text():
-            raise ValueError("请先选择输出目录。")
-        if not self.watermark_path_edit.text():
-            raise ValueError("请先选择水印图片。")
-        ok, message = validate_source_dir(self.source_dir_edit.text())
-        if not ok:
-            raise ValueError(message)
-        ok, message = check_file_access(self.watermark_path_edit.text())
-        if not ok:
-            raise ValueError(message)
-        if self.preview_check.isChecked() and self.preview_image_path and not os.path.exists(self.preview_image_path):
-            raise ValueError("指定预览图片不存在。")
-
-    def start_processing(self):
-        try:
-            self.validate_inputs()
-            self.save_settings()
-            settings = self.collect_settings()
-            if self.thread is not None:
-                return
-            self.thread = ProcessingThread(settings)
-            self.thread.log.connect(self.addTextToLog)
-            self.thread.progress.connect(self.update_progress)
-            self.thread.finished.connect(self.on_processing_finished)
-            self.thread.run = self.thread.run
-            self.thread.start = self.thread.start
-            self.thread.start()
-            self.addTextToLog("[INFO] 开始批量处理任务。")
-        except Exception as exc:
-            QMessageBox.warning(self, "参数错误", str(exc))
-
-    def stop_processing(self):
-        if self.thread is not None:
-            self.thread.stop()
-            self.addTextToLog("[WARN] 用户请求停止当前任务。")
-
-    def update_progress(self, current: int, total: int, text: str):
-        progress = 0 if total == 0 else int(current / total * 100)
-        self.setWindowTitle(f"WatermarkTool - {progress}%")
-        self.addTextToLog(f"[PROGRESS] {text}（{current}/{total}）")
-
-    def on_processing_finished(self, data: dict):
-        if data.get("error"):
-            self.addTextToLog(f"[ERROR] 处理任务异常：{data['error']}")
-        self.addTextToLog(f"[INFO] 处理完成。成功：{data.get('success', 0)}，跳过：{data.get('skipped', 0)}，失败：{data.get('failed', 0)}")
-        self.thread = None
-        self.setWindowTitle("WatermarkTool")
-
-    def refresh_preview(self):
-        if self.preview_check.isChecked() and self.preview_image_path:
-            self.preview_panel.set_preview(self.preview_image_path, "已加载指定预览图片")
-            return
-        source_dir = self.source_dir_edit.text()
-        if not source_dir:
-            self.preview_panel.set_preview(None, "请先选择源目录")
-            return
-        files = []
-        for item in sorted(Path(source_dir).iterdir(), key=lambda x: x.name.lower()):
-            if item.is_file() and item.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
-                files.append(str(item))
-        if not files:
-            self.preview_panel.set_preview(None, "源目录中没有可预览图片")
-            return
-        self.preview_panel.set_preview(files[0], "已加载源目录首张图片作为预览")
-
-    def closeEvent(self, event):
-        if self.thread is not None:
-            reply = QMessageBox.question(self, "确认退出", "当前任务仍在运行，是否确认退出？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.No:
-                event.ignore()
-                return
-        self.save_settings()
-        event.accept()
 
 
-if __name__ == "__main__":
-    app = QApplication([])
-    window = MainWindow()
-    window.show()
-    app.exec()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
